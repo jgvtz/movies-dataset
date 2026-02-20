@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>13F Fund Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .tab-active { border-bottom: 2px solid #2563eb; color: #2563eb; font-weight: 600; }
+    .fade-in { animation: fadeIn .25s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .change-bar-pos { background: linear-gradient(90deg, #22c55e, #16a34a); }
+    .change-bar-neg { background: linear-gradient(90deg, #ef4444, #dc2626); }
+    .heatmap-cell { transition: all .15s; }
+    .heatmap-cell:hover { transform: scale(1.08); box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  </style>
+</head>
+<body class="h-full text-gray-800">
+
+<!-- ─── NAV ────────────────────────────────────────────── -->
+<nav class="bg-white border-b shadow-sm sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between h-14">
+      <div class="flex items-center gap-2">
+        <span class="text-xl font-bold tracking-tight">13F Tracker</span>
+        <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">SEC Filings</span>
+      </div>
+      <div class="hidden sm:flex gap-1" id="nav-tabs">
+        <button onclick="switchTab('overview')"   id="tab-overview"   class="px-3 py-2 text-sm rounded-t hover:bg-gray-50 tab-active">Overview</button>
+        <button onclick="switchTab('fund')"       id="tab-fund"       class="px-3 py-2 text-sm rounded-t hover:bg-gray-50">Fund Deep Dive</button>
+        <button onclick="switchTab('changes')"    id="tab-changes"    class="px-3 py-2 text-sm rounded-t hover:bg-gray-50">Position Changes</button>
+        <button onclick="switchTab('crossfund')"  id="tab-crossfund"  class="px-3 py-2 text-sm rounded-t hover:bg-gray-50">Cross-Fund</button>
+      </div>
+      <!-- Mobile menu -->
+      <select id="mobile-nav" class="sm:hidden text-sm border rounded px-2 py-1" onchange="switchTab(this.value)">
+        <option value="overview">Overview</option>
+        <option value="fund">Fund Deep Dive</option>
+        <option value="changes">Position Changes</option>
+        <option value="crossfund">Cross-Fund</option>
+      </select>
+    </div>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+  <!-- Loading spinner -->
+  <div id="loading" class="flex items-center justify-center py-20">
+    <div class="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+    <span class="ml-3 text-gray-500">Loading 13F data...</span>
+  </div>
+
+  <!-- ═══════════ OVERVIEW ═══════════ -->
+  <section id="page-overview" class="hidden fade-in">
+    <h2 class="text-2xl font-bold mb-1">Portfolio Overview</h2>
+    <p class="text-sm text-gray-500 mb-6" id="overview-quarter"></p>
+
+    <!-- Fund cards -->
+    <div id="fund-cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8"></div>
+
+    <!-- Top holdings per fund -->
+    <h3 class="text-lg font-semibold mb-3">Top 5 Holdings per Fund</h3>
+    <div class="flex gap-1 mb-3 flex-wrap" id="fund-tabs-bar"></div>
+    <div class="bg-white rounded-lg shadow-sm border p-5">
+      <canvas id="topHoldingsChart" height="220"></canvas>
+    </div>
+
+    <!-- Sector allocation -->
+    <h3 class="text-lg font-semibold mt-8 mb-3">Sector Allocation</h3>
+    <div class="bg-white rounded-lg shadow-sm border p-5">
+      <canvas id="sectorChart" height="180"></canvas>
+    </div>
+
+    <!-- Full table -->
+    <h3 class="text-lg font-semibold mt-8 mb-3">All Holdings</h3>
+    <div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+          <tr>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Fund</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Ticker</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Company</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Sector</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Value</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">% Portfolio</th>
+          </tr>
+        </thead>
+        <tbody id="overview-table" class="divide-y"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════ FUND DEEP DIVE ═══════════ -->
+  <section id="page-fund" class="hidden fade-in">
+    <div class="flex items-center gap-4 mb-6 flex-wrap">
+      <h2 class="text-2xl font-bold">Fund Deep Dive</h2>
+      <select id="fund-select" class="border rounded-lg px-3 py-2 text-sm bg-white shadow-sm" onchange="loadFund(this.value)">
+        {% for name, info in funds.items() %}
+        <option value="{{ info.short_name }}">{{ info.short_name }} — {{ info.description }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Metrics -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="fund-metrics"></div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      <!-- Holdings bar chart -->
+      <div class="lg:col-span-2 bg-white rounded-lg shadow-sm border p-5">
+        <h3 class="font-semibold mb-3">Holdings by Value</h3>
+        <canvas id="fundHoldingsChart"></canvas>
+      </div>
+      <!-- Concentration donut -->
+      <div class="bg-white rounded-lg shadow-sm border p-5">
+        <h3 class="font-semibold mb-3">Concentration</h3>
+        <canvas id="fundDonutChart" height="260"></canvas>
+        <h3 class="font-semibold mt-4 mb-2">Sector Weights</h3>
+        <div id="fund-sectors"></div>
+      </div>
+    </div>
+
+    <!-- Detail table -->
+    <div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+          <tr>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Ticker</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Company</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Sector</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Shares</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Value</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">% Portfolio</th>
+          </tr>
+        </thead>
+        <tbody id="fund-table" class="divide-y"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════ POSITION CHANGES ═══════════ -->
+  <section id="page-changes" class="hidden fade-in">
+    <div class="flex items-center gap-4 mb-6 flex-wrap">
+      <h2 class="text-2xl font-bold">Position Changes</h2>
+      <select id="changes-select" class="border rounded-lg px-3 py-2 text-sm bg-white shadow-sm" onchange="loadChanges(this.value)">
+        {% for name, info in funds.items() %}
+        <option value="{{ info.short_name }}">{{ info.short_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="text-sm text-gray-500 mb-4" id="changes-period"></p>
+
+    <!-- Change summary -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="changes-metrics"></div>
+
+    <!-- Changes visual -->
+    <div class="bg-white rounded-lg shadow-sm border p-5 mb-6">
+      <h3 class="font-semibold mb-3">Share Changes by Position</h3>
+      <div id="changes-bars"></div>
+    </div>
+
+    <!-- Changes table -->
+    <div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+          <tr>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Ticker</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Company</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Action</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Prev Shares</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Curr Shares</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Change %</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Curr Value</th>
+          </tr>
+        </thead>
+        <tbody id="changes-table" class="divide-y"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════ CROSS-FUND ═══════════ -->
+  <section id="page-crossfund" class="hidden fade-in">
+    <h2 class="text-2xl font-bold mb-1">Cross-Fund Analysis</h2>
+    <p class="text-sm text-gray-500 mb-6" id="cross-quarter"></p>
+
+    <!-- High conviction -->
+    <h3 class="text-lg font-semibold mb-3">High-Conviction Ideas <span class="text-sm font-normal text-gray-500">(held by 3+ funds)</span></h3>
+    <div id="high-conviction" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8"></div>
+
+    <!-- Conviction heatmap -->
+    <h3 class="text-lg font-semibold mb-3">Conviction Heatmap <span class="text-sm font-normal text-gray-500">(% of portfolio)</span></h3>
+    <div class="bg-white rounded-lg shadow-sm border p-5 mb-8 overflow-x-auto" id="heatmap-container"></div>
+
+    <!-- Overlap matrix -->
+    <h3 class="text-lg font-semibold mb-3">Fund Overlap Matrix</h3>
+    <div class="bg-white rounded-lg shadow-sm border p-5 mb-8">
+      <div id="overlap-matrix" class="overflow-x-auto"></div>
+    </div>
+
+    <!-- Shared positions table -->
+    <h3 class="text-lg font-semibold mb-3">All Shared Positions</h3>
+    <div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+          <tr>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Ticker</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Company</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Sector</th>
+            <th class="px-4 py-3 text-center font-medium text-gray-600"># Funds</th>
+            <th class="px-4 py-3 text-left font-medium text-gray-600">Held By</th>
+            <th class="px-4 py-3 text-right font-medium text-gray-600">Total Value</th>
+          </tr>
+        </thead>
+        <tbody id="crossfund-table" class="divide-y"></tbody>
+      </table>
+    </div>
+
+    <div class="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-800">
+      <strong>How to use this:</strong> Stocks where multiple respected investors independently hold high-conviction positions
+      may be worth deeper research. These are starting points, not recommendations. Always conduct your own due diligence.
+    </div>
+  </section>
+
+</main>
+
+<!-- Footer -->
+<footer class="border-t mt-12 py-6 text-center text-xs text-gray-400">
+  Data from SEC 13F-HR filings (public information). Not investment advice.
+</footer>
+
+<script>
+// ─── State ───────────────────────────────────────────────
+let overviewData = null;
+let chartInstances = {};
+
+const COLORS = ['#2563eb','#7c3aed','#db2777','#ea580c','#16a34a','#0891b2','#4f46e5','#c026d3','#e11d48','#ca8a04'];
+const SECTOR_COLORS = {
+  'Technology':'#2563eb','Financials':'#16a34a','Healthcare':'#db2777',
+  'Industrials':'#ea580c','Consumer Discretionary':'#7c3aed',
+  'Communication Services':'#0891b2','Energy':'#ca8a04'
+};
+
+// ─── Tab Switching ───────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('[id^="page-"]').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('#nav-tabs button').forEach(b => b.classList.remove('tab-active'));
+  document.getElementById('page-' + tab).classList.remove('hidden');
+  document.getElementById('tab-' + tab)?.classList.add('tab-active');
+  document.getElementById('mobile-nav').value = tab;
+
+  if (tab === 'overview' && !overviewData) loadOverview();
+  if (tab === 'fund') loadFund(document.getElementById('fund-select').value);
+  if (tab === 'changes') loadChanges(document.getElementById('changes-select').value);
+  if (tab === 'crossfund') loadCrossFund();
+}
+
+// ─── Helpers ─────────────────────────────────────────────
+function fmtVal(v) { return v >= 1e9 ? `$${(v/1e9).toFixed(1)}B` : `$${(v/1e6).toFixed(0)}M`; }
+function fmtNum(n) { return n.toLocaleString(); }
+function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
+
+function actionBadge(action) {
+  const map = {
+    'New Position': 'bg-emerald-100 text-emerald-700',
+    'Increased':    'bg-green-100 text-green-700',
+    'Reduced':      'bg-red-100 text-red-700',
+    'Sold Out':     'bg-red-200 text-red-800',
+    'Unchanged':    'bg-gray-100 text-gray-600',
+  };
+  return `<span class="px-2 py-0.5 rounded-full text-xs font-medium ${map[action] || 'bg-gray-100'}">${action}</span>`;
+}
+
+// ─── OVERVIEW ────────────────────────────────────────────
+async function loadOverview() {
+  const res = await fetch('/api/overview');
+  overviewData = await res.json();
+  const d = overviewData;
+
+  document.getElementById('overview-quarter').textContent = `Reporting period: ${d.quarter}`;
+
+  // Fund cards
+  const cards = d.funds.map(f => `
+    <div class="bg-white rounded-lg shadow-sm border p-4 hover:shadow-md transition cursor-pointer"
+         onclick="document.getElementById('fund-select').value='${f.short_name}'; switchTab('fund')">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-bold text-lg">${f.short_name}</span>
+        <span class="text-xs bg-gray-100 px-2 py-0.5 rounded-full">${f.style}</span>
+      </div>
+      <div class="text-2xl font-bold text-blue-600">${f.total_value_fmt}</div>
+      <div class="text-xs text-gray-500 mt-1">${f.num_positions} positions · Top 5: ${f.top5_concentration}%</div>
+    </div>
+  `).join('');
+  document.getElementById('fund-cards').innerHTML = cards;
+
+  // Fund tab bar for top holdings chart
+  const tabBar = d.funds.map((f, i) => `
+    <button onclick="showFundTopChart(${i})"
+            class="px-3 py-1.5 text-xs rounded-full border font-medium transition fund-tab-btn
+                   ${i===0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 hover:bg-gray-50'}"
+            data-idx="${i}">${f.short_name}</button>
+  `).join('');
+  document.getElementById('fund-tabs-bar').innerHTML = tabBar;
+  showFundTopChart(0);
+
+  // Sector chart
+  renderSectorChart(d);
+
+  // Full table
+  let rows = '';
+  d.funds.forEach(f => {
+    f.top_holdings.forEach(h => {
+      rows += `<tr class="hover:bg-gray-50">
+        <td class="px-4 py-2 font-medium">${f.short_name}</td>
+        <td class="px-4 py-2 font-mono text-blue-600">${h.ticker}</td>
+        <td class="px-4 py-2">${h.company}</td>
+        <td class="px-4 py-2 text-gray-500">-</td>
+        <td class="px-4 py-2 text-right">${fmtVal(h.value_usd)}</td>
+        <td class="px-4 py-2 text-right">${h.pct_portfolio.toFixed(1)}%</td>
+      </tr>`;
+    });
+  });
+  document.getElementById('overview-table').innerHTML = rows;
+
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('page-overview').classList.remove('hidden');
+}
+
+function showFundTopChart(idx) {
+  document.querySelectorAll('.fund-tab-btn').forEach(b => {
+    b.classList.toggle('bg-blue-600', +b.dataset.idx === idx);
+    b.classList.toggle('text-white', +b.dataset.idx === idx);
+    b.classList.toggle('border-blue-600', +b.dataset.idx === idx);
+    b.classList.toggle('bg-white', +b.dataset.idx !== idx);
+    b.classList.toggle('text-gray-600', +b.dataset.idx !== idx);
+  });
+
+  const f = overviewData.funds[idx];
+  const labels = f.top_holdings.map(h => h.ticker);
+  const values = f.top_holdings.map(h => h.value_usd / 1e9);
+  const pcts = f.top_holdings.map(h => h.pct_portfolio);
+
+  destroyChart('topHoldingsChart');
+  chartInstances['topHoldingsChart'] = new Chart(document.getElementById('topHoldingsChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: COLORS.slice(0, labels.length),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `$${ctx.raw.toFixed(2)}B (${pcts[ctx.dataIndex].toFixed(1)}%)`
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Value ($B)' }, grid: { color: '#f3f4f6' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+function renderSectorChart(d) {
+  const sectorMap = {};
+  d.funds.forEach(f => {
+    f.top_holdings.forEach(h => {
+      // We'll aggregate by fund for the stacked chart
+    });
+  });
+
+  // Simpler: one bar per fund, colored by a single color
+  destroyChart('sectorChart');
+  const labels = d.funds.map(f => f.short_name);
+  const values = d.funds.map(f => f.total_value / 1e9);
+  chartInstances['sectorChart'] = new Chart(document.getElementById('sectorChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: COLORS.slice(0, labels.length),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { title: { display: true, text: '13F AUM ($B)' }, grid: { color: '#f3f4f6' } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+// ─── FUND DEEP DIVE ──────────────────────────────────────
+async function loadFund(short) {
+  const res = await fetch(`/api/fund/${short}`);
+  const d = await res.json();
+
+  // Metrics
+  document.getElementById('fund-metrics').innerHTML = [
+    metricCard('13F AUM', d.total_value_fmt, ''),
+    metricCard('Positions', d.num_positions, ''),
+    metricCard('Top 5', d.top5_concentration + '%', 'concentration'),
+    metricCard('Style', d.style, ''),
+  ].join('');
+
+  // Holdings bar chart
+  const labels = d.holdings.map(h => h.ticker);
+  const values = d.holdings.map(h => h.value_usd / 1e9);
+  const sectorColors = d.holdings.map(h => SECTOR_COLORS[h.sector] || '#6b7280');
+
+  destroyChart('fundHoldingsChart');
+  chartInstances['fundHoldingsChart'] = new Chart(document.getElementById('fundHoldingsChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: sectorColors,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const h = d.holdings[ctx.dataIndex];
+              return `${h.company}: $${ctx.raw.toFixed(2)}B (${h.pct_portfolio.toFixed(1)}%)`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Value ($B)' }, grid: { color: '#f3f4f6' } },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+
+  // Donut chart
+  const top7 = d.holdings.slice(0, 7);
+  const othersPct = 100 - top7.reduce((s, h) => s + h.pct_portfolio, 0);
+
+  destroyChart('fundDonutChart');
+  const donutLabels = top7.map(h => h.ticker);
+  const donutVals = top7.map(h => h.pct_portfolio);
+  if (othersPct > 0.5) { donutLabels.push('Others'); donutVals.push(Math.round(othersPct * 10) / 10); }
+
+  chartInstances['fundDonutChart'] = new Chart(document.getElementById('fundDonutChart'), {
+    type: 'doughnut',
+    data: {
+      labels: donutLabels,
+      datasets: [{ data: donutVals, backgroundColor: COLORS.slice(0, donutLabels.length), borderWidth: 2 }]
+    },
+    options: {
+      cutout: '55%',
+      responsive: true,
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.raw}%` } }
+      }
+    }
+  });
+
+  // Sector weights
+  document.getElementById('fund-sectors').innerHTML = d.sectors.map(s => `
+    <div class="flex items-center justify-between py-1.5 border-b border-gray-100 last:border-0">
+      <div class="flex items-center gap-2">
+        <div class="w-2.5 h-2.5 rounded-full" style="background:${SECTOR_COLORS[s.sector]||'#6b7280'}"></div>
+        <span class="text-sm">${s.sector}</span>
+      </div>
+      <span class="text-sm font-medium">${s.pct.toFixed(1)}%</span>
+    </div>
+  `).join('');
+
+  // Table
+  document.getElementById('fund-table').innerHTML = d.holdings.map(h => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-2 font-mono text-blue-600 font-medium">${h.ticker}</td>
+      <td class="px-4 py-2">${h.company}</td>
+      <td class="px-4 py-2 text-gray-500">${h.sector}</td>
+      <td class="px-4 py-2 text-right">${fmtNum(h.shares)}</td>
+      <td class="px-4 py-2 text-right">${fmtVal(h.value_usd)}</td>
+      <td class="px-4 py-2 text-right font-medium">${h.pct_portfolio.toFixed(1)}%</td>
+    </tr>
+  `).join('');
+}
+
+function metricCard(label, value, sub) {
+  return `<div class="bg-white rounded-lg shadow-sm border p-4">
+    <div class="text-xs text-gray-500 uppercase tracking-wide">${label}</div>
+    <div class="text-2xl font-bold mt-1">${value}</div>
+    ${sub ? `<div class="text-xs text-gray-400 mt-0.5">${sub}</div>` : ''}
+  </div>`;
+}
+
+// ─── POSITION CHANGES ────────────────────────────────────
+async function loadChanges(short) {
+  const res = await fetch(`/api/changes/${short}`);
+  const d = await res.json();
+
+  document.getElementById('changes-period').textContent = `${d.prior_q} → ${d.current_q}`;
+
+  document.getElementById('changes-metrics').innerHTML = [
+    `<div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+      <div class="text-xs text-emerald-600 uppercase">New Positions</div>
+      <div class="text-3xl font-bold text-emerald-700 mt-1">${d.summary.new}</div>
+    </div>`,
+    `<div class="bg-green-50 border border-green-200 rounded-lg p-4">
+      <div class="text-xs text-green-600 uppercase">Increased</div>
+      <div class="text-3xl font-bold text-green-700 mt-1">${d.summary.increased}</div>
+    </div>`,
+    `<div class="bg-red-50 border border-red-200 rounded-lg p-4">
+      <div class="text-xs text-red-600 uppercase">Reduced</div>
+      <div class="text-3xl font-bold text-red-700 mt-1">${d.summary.reduced}</div>
+    </div>`,
+    `<div class="bg-red-50 border border-red-200 rounded-lg p-4">
+      <div class="text-xs text-red-600 uppercase">Sold Out</div>
+      <div class="text-3xl font-bold text-red-700 mt-1">${d.summary.sold}</div>
+    </div>`,
+  ].join('');
+
+  // Visual bars
+  const active = d.changes.filter(c => c.action !== 'Unchanged').sort((a,b) => b.share_change_pct - a.share_change_pct);
+  const maxAbs = Math.max(...active.map(c => Math.abs(c.share_change_pct)), 1);
+
+  document.getElementById('changes-bars').innerHTML = active.map(c => {
+    const pct = c.share_change_pct;
+    const width = Math.min(Math.abs(pct) / maxAbs * 100, 100);
+    const isPos = pct >= 0;
+    return `<div class="flex items-center gap-3 py-1.5">
+      <div class="w-16 text-sm font-mono font-medium text-right">${c.ticker}</div>
+      <div class="flex-1 flex items-center ${isPos ? '' : 'flex-row-reverse'}">
+        <div class="${isPos ? 'change-bar-pos' : 'change-bar-neg'} h-6 rounded"
+             style="width:${Math.max(width, 2)}%"></div>
+      </div>
+      <div class="w-20 text-sm text-right font-medium ${isPos ? 'text-green-600' : 'text-red-600'}">
+        ${pct > 0 ? '+' : ''}${pct.toFixed(1)}%
+      </div>
+      <div class="w-24">${actionBadge(c.action)}</div>
+    </div>`;
+  }).join('');
+
+  // Table
+  document.getElementById('changes-table').innerHTML = d.changes.map(c => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-2 font-mono text-blue-600 font-medium">${c.ticker}</td>
+      <td class="px-4 py-2">${c.company}</td>
+      <td class="px-4 py-2">${actionBadge(c.action)}</td>
+      <td class="px-4 py-2 text-right">${fmtNum(c.prev_shares)}</td>
+      <td class="px-4 py-2 text-right">${fmtNum(c.curr_shares)}</td>
+      <td class="px-4 py-2 text-right font-medium ${c.share_change_pct >= 0 ? 'text-green-600' : 'text-red-600'}">
+        ${c.share_change_pct > 0 ? '+' : ''}${c.share_change_pct.toFixed(1)}%
+      </td>
+      <td class="px-4 py-2 text-right">${fmtVal(c.curr_value)}</td>
+    </tr>
+  `).join('');
+}
+
+// ─── CROSS-FUND ──────────────────────────────────────────
+async function loadCrossFund() {
+  const res = await fetch('/api/crossfund');
+  const d = await res.json();
+
+  document.getElementById('cross-quarter').textContent = `Reporting period: ${d.quarter}`;
+
+  // High conviction cards
+  const highConv = d.shared.filter(s => s.num_funds >= 3);
+  document.getElementById('high-conviction').innerHTML = highConv.map(s => `
+    <div class="bg-white rounded-lg shadow-sm border p-5 hover:shadow-md transition">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xl font-bold font-mono text-blue-600">${s.ticker}</span>
+        <span class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded-full">${s.num_funds} funds</span>
+      </div>
+      <div class="text-sm font-medium mb-1">${s.company}</div>
+      <div class="text-xs text-gray-500 mb-3">${s.sector} · Total: ${fmtVal(s.total_value)}</div>
+      <div class="flex flex-wrap gap-1">
+        ${s.funds.split(', ').map(f => `<span class="bg-gray-100 text-gray-700 text-xs px-2 py-0.5 rounded-full">${f}</span>`).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  // Conviction heatmap
+  const tickers = [...new Set(d.heatmap.map(h => h.ticker))];
+  // Sort tickers by total conviction
+  const tickerTotals = {};
+  d.heatmap.forEach(h => { tickerTotals[h.ticker] = (tickerTotals[h.ticker] || 0) + h.pct; });
+  tickers.sort((a, b) => tickerTotals[b] - tickerTotals[a]);
+
+  const heatmapLookup = {};
+  d.heatmap.forEach(h => { heatmapLookup[`${h.ticker}-${h.fund}`] = h; });
+
+  let heatmapHTML = '<table class="text-sm"><thead><tr><th class="px-3 py-2"></th>';
+  d.fund_names.forEach(f => { heatmapHTML += `<th class="px-3 py-2 text-center font-medium">${f}</th>`; });
+  heatmapHTML += '</tr></thead><tbody>';
+
+  tickers.forEach(t => {
+    heatmapHTML += `<tr><td class="px-3 py-1 font-mono font-medium text-blue-600 whitespace-nowrap">${t}</td>`;
+    d.fund_names.forEach(f => {
+      const h = heatmapLookup[`${t}-${f}`];
+      if (h) {
+        const intensity = Math.min(h.pct / 20, 1);
+        const bg = `rgba(37, 99, 235, ${0.1 + intensity * 0.8})`;
+        const textColor = intensity > 0.5 ? 'white' : '#1e3a5f';
+        heatmapHTML += `<td class="px-3 py-1 text-center">
+          <div class="heatmap-cell rounded px-2 py-1.5 font-medium cursor-default"
+               style="background:${bg}; color:${textColor}"
+               title="${h.company} — ${f}: ${h.pct}%">${h.pct}%</div>
+        </td>`;
+      } else {
+        heatmapHTML += '<td class="px-3 py-1 text-center"><div class="text-gray-300 py-1.5">—</div></td>';
+      }
+    });
+    heatmapHTML += '</tr>';
+  });
+  heatmapHTML += '</tbody></table>';
+  document.getElementById('heatmap-container').innerHTML = heatmapHTML;
+
+  // Overlap matrix
+  let overlapHTML = '<table class="text-sm"><thead><tr><th class="px-3 py-2"></th>';
+  d.fund_names.forEach(f => { overlapHTML += `<th class="px-4 py-2 text-center font-medium">${f}</th>`; });
+  overlapHTML += '</tr></thead><tbody>';
+  d.fund_names.forEach(f1 => {
+    overlapHTML += `<tr><td class="px-3 py-2 font-medium">${f1}</td>`;
+    d.fund_names.forEach(f2 => {
+      const v = d.overlap[f1][f2];
+      const maxV = Math.max(...d.fund_names.map(f => d.overlap[f][f]));
+      const intensity = v / maxV;
+      const bg = f1 === f2
+        ? `rgba(37, 99, 235, 0.15)`
+        : `rgba(37, 99, 235, ${intensity * 0.7})`;
+      const textColor = intensity > 0.5 && f1 !== f2 ? 'white' : '#1e3a5f';
+      overlapHTML += `<td class="px-4 py-2 text-center">
+        <div class="rounded px-2 py-1 font-bold" style="background:${bg}; color:${textColor}">${v}</div>
+      </td>`;
+    });
+    overlapHTML += '</tr>';
+  });
+  overlapHTML += '</tbody></table>';
+  document.getElementById('overlap-matrix').innerHTML = overlapHTML;
+
+  // Shared positions table
+  document.getElementById('crossfund-table').innerHTML = d.shared.map(s => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-2 font-mono text-blue-600 font-medium">${s.ticker}</td>
+      <td class="px-4 py-2">${s.company}</td>
+      <td class="px-4 py-2 text-gray-500">${s.sector}</td>
+      <td class="px-4 py-2 text-center">
+        <span class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-full">${s.num_funds}</span>
+      </td>
+      <td class="px-4 py-2">${s.funds.split(', ').map(f => `<span class="bg-gray-100 text-xs px-1.5 py-0.5 rounded mr-1">${f}</span>`).join('')}</td>
+      <td class="px-4 py-2 text-right font-medium">${fmtVal(s.total_value)}</td>
+    </tr>
+  `).join('');
+}
+
+// ─── Init ────────────────────────────────────────────────
+loadOverview();
+</script>
+</body>
+</html>

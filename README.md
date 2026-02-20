@@ -1,6 +1,8 @@
 # 13F Fund Tracker
 
-A Streamlit dashboard that tracks 13F filings from SEC EDGAR for institutional investors you follow. Inspired by [13f.info](https://13f.info/).
+Track 13F filings from top institutional investors. Inspired by [13f.info](https://13f.info/).
+
+Built as a research tool for the first layer of an investment process — finding potential opportunities from public SEC filings, before conducting deep fundamental research.
 
 ## Tracked Funds
 
@@ -12,32 +14,68 @@ A Streamlit dashboard that tracks 13F filings from SEC EDGAR for institutional i
 | **ValueAct Capital** | Activist / Concentrated | 0001418814 |
 | **Lone Pine Capital** | Growth / Tiger Cub | 0001061768 |
 
-## Features
+## Web App
 
-- **Overview** — Portfolio summaries, top holdings per fund, sector allocation
-- **Fund Deep Dive** — Detailed breakdown of any fund's holdings with concentration analysis
-- **Position Changes** — Quarter-over-quarter changes (new positions, increases, reductions, exits)
-- **Cross-Fund Analysis** — Stocks held by multiple funds, overlap matrix, high-conviction ideas
-- **Conviction Heatmap** — Visual map of portfolio weights across shared positions
+A Flask application with Tailwind CSS + Chart.js frontend.
 
-## How to run
+**Pages:**
+- **Overview** — Fund AUM, top holdings per fund, sector allocation
+- **Fund Deep Dive** — Full holdings breakdown, concentration donut, sector weights
+- **Position Changes** — Quarter-over-quarter activity (new / increased / reduced / sold)
+- **Cross-Fund Analysis** — Overlap matrix, conviction heatmap, high-conviction ideas (3+ funds)
 
-1. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+### Run locally
 
-2. Run the app:
-   ```
-   streamlit run streamlit_app.py
-   ```
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
+Then open http://localhost:5000
+
+## Telegram Bot
+
+Get portfolio summaries and alerts on your phone.
+
+### Setup
+
+1. Talk to [@BotFather](https://t.me/BotFather) on Telegram
+2. Create a new bot with `/newbot`
+3. Copy the token and run:
+
+```bash
+export TELEGRAM_BOT_TOKEN="your-token-here"
+python telegram_bot.py
+```
+
+### Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome message |
+| `/overview` | All funds summary |
+| `/fund TCI` | Deep dive into a specific fund |
+| `/changes TCI` | Quarter-over-quarter changes |
+| `/crossfund` | Stocks held by multiple funds |
+| `/conviction` | High-conviction ideas (3+ funds) with conviction bars |
+
+## Project Structure
+
+```
+app.py                  Flask web application
+telegram_bot.py         Telegram bot
+templates/index.html    Frontend (Tailwind + Chart.js)
+data/
+  fund_holdings.py      Holdings data + analysis functions
+  sec_edgar.py          SEC EDGAR live data fetcher
+```
 
 ## Data
 
-All data is public information disclosed quarterly by institutional investment managers with >$100M AUM per SEC regulations. The app includes:
+All data is public information disclosed quarterly by institutional investment managers with >$100M AUM per SEC regulations.
 
-- **Sample data** (`data/fund_holdings.py`) — Realistic holdings based on recent 13F filings
-- **SEC EDGAR fetcher** (`data/sec_edgar.py`) — Module to pull live data from SEC EDGAR API
+- `data/fund_holdings.py` — Sample data based on Q3/Q4 2024 13F filings
+- `data/sec_edgar.py` — Module to pull live data from SEC EDGAR API
 
 ## Disclaimer
 
