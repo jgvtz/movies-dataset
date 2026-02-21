@@ -1,1 +1,6 @@
-streamlit
+flask
+gunicorn
+numpy
+pandas
+requests
+python-telegram-bot
