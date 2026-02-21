@@ -111,8 +111,11 @@ def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
     if not xml_filename:
         return pd.DataFrame()
 
+    # Extract just the filename if href contains a full path
+    xml_basename = xml_filename.rsplit("/", 1)[-1]
+
     # Fetch and parse the XML
-    xml_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}/{xml_filename}"
+    xml_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}/{xml_basename}"
     _rate_limit()
     resp = requests.get(xml_url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
