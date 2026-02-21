@@ -90,7 +90,7 @@ def _enrich_live_data(df: pd.DataFrame) -> pd.DataFrame:
 
 # ─── Data Loading ────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def load_live_data() -> tuple[pd.DataFrame, bool]:
+def load_live_data() -> tuple[pd.DataFrame, bool, str]:
     """Try to fetch live data from SEC EDGAR, fall back to sample data."""
     try:
         all_dfs = []
@@ -101,14 +101,13 @@ def load_live_data() -> tuple[pd.DataFrame, bool]:
         if all_dfs:
             combined = pd.concat(all_dfs, ignore_index=True)
             combined = _enrich_live_data(combined)
-            return combined, True
-    except Exception:
-        pass
-    # Fallback to hardcoded sample data
-    return get_all_holdings(), False
+            return combined, True, ""
+        return get_all_holdings(), False, "SEC returned empty data for all funds"
+    except Exception as e:
+        return get_all_holdings(), False, str(e)
 
 
-df_all, is_live = load_live_data()
+df_all, is_live, _load_error = load_live_data()
 quarters = sorted(df_all["quarter"].unique(), reverse=True)
 latest_q = quarters[0]
 prior_q = quarters[1] if len(quarters) > 1 else None
@@ -192,6 +191,8 @@ with st.sidebar:
             st.caption(f"Latest filing: {latest_filing}")
     else:
         st.warning("Using sample data (SEC EDGAR unavailable)")
+        if _load_error:
+            st.caption(f"Error: {_load_error}")
     st.divider()
 
     page = st.radio(

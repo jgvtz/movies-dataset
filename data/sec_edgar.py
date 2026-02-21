@@ -22,7 +22,7 @@ import streamlit as st
 SEC_BASE = "https://data.sec.gov"
 SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data"
 HEADERS = {
-    "User-Agent": "13FTracker research@example.com",
+    "User-Agent": "13FundTracker admin@13ftracker.app",
     "Accept-Encoding": "gzip, deflate",
 }
 
