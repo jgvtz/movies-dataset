@@ -74,66 +74,80 @@ def get_recent_13f_filings(cik: str, num_filings: int = 4) -> list[dict]:
     return filings
 
 
+def _resolve_xml_url(href: str) -> str:
+    """Resolve an href from an EDGAR filing index page to a full URL."""
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        return f"https://www.sec.gov{href}"
+    return f"https://www.sec.gov/{href}"
+
+
+def _collect_xml_urls(directory_url: str) -> list[str]:
+    """Fetch the EDGAR filing directory and return all XML document URLs.
+
+    Mirrors the approach used by github.com/toddwschneider/sec-13f-filings:
+    fetch the directory HTML, find all <a> links ending in .xml.
+    """
+    import re
+
+    _rate_limit()
+    resp = requests.get(directory_url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+
+    # Extract all href values pointing to .xml files (preserve original case)
+    hrefs = re.findall(r'href="([^"]+\.xml)"', resp.text, re.IGNORECASE)
+    return [_resolve_xml_url(h) for h in hrefs]
+
+
+def _find_info_table_url(xml_urls: list[str]) -> str | None:
+    """Identify the info table XML from a list of filing XML URLs.
+
+    Strategy 1: regex match for 'info.*table' in the URL (covers most filings).
+    Strategy 2: download each XML and check for <informationTable> element.
+    """
+    import re
+
+    # Strategy 1: Match URL pattern (fast, no extra downloads)
+    for url in xml_urls:
+        if re.search(r'info.*table', url, re.IGNORECASE):
+            return url
+
+    # Strategy 2: Download each XML and inspect content (robust fallback)
+    for url in xml_urls:
+        try:
+            _rate_limit()
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            # Strip namespaces for simpler matching
+            tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+            if tag.lower() == "informationtable":
+                return url
+        except Exception:
+            continue
+
+    return None
+
+
 @st.cache_data(ttl=3600, show_spinner="Parsing 13F information table...")
 def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
     """Parse the 13F information table XML for a specific filing."""
-    import re
-
     cik_clean = cik.lstrip("0")
     acc_no_dashes = accession.replace("-", "")
-    base_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}"
+    directory_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}"
 
-    xml_filename = None
-
-    # Strategy 1: Use JSON filing index (most reliable, preserves case)
-    try:
-        _rate_limit()
-        json_resp = requests.get(f"{base_url}/index.json", headers=HEADERS, timeout=15)
-        if json_resp.status_code == 200:
-            index_data = json_resp.json()
-            items = index_data.get("directory", {}).get("item", [])
-            for item in items:
-                name = item.get("name", "")
-                if "infotable" in name.lower() and name.lower().endswith(".xml"):
-                    xml_filename = name
-                    break
-    except Exception:
-        pass
-
-    # Strategy 2: Scrape HTML index (use original case, not lowered)
-    if not xml_filename:
-        _rate_limit()
-        resp = requests.get(f"{base_url}/", headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-
-        for line in resp.text.split("\n"):
-            if "infotable" in line.lower() and ".xml" in line.lower():
-                match = re.search(r'href="([^"]+\.xml)"', line, re.IGNORECASE)
-                if match:
-                    xml_filename = match.group(1)
-                    break
-
-        if not xml_filename:
-            for line in resp.text.split("\n"):
-                if ".xml" in line.lower() and "primary_doc" not in line.lower():
-                    match = re.search(r'href="([^"]+\.xml)"', line, re.IGNORECASE)
-                    if match:
-                        xml_filename = match.group(1)
-                        break
-
-    if not xml_filename:
+    # Collect all XML URLs from the filing directory page
+    xml_urls = _collect_xml_urls(directory_url)
+    if not xml_urls:
         return pd.DataFrame()
 
-    # Resolve the filename: could be absolute path, relative path, or just a name
-    if xml_filename.startswith("http"):
-        xml_url = xml_filename
-    elif xml_filename.startswith("/"):
-        xml_url = f"https://www.sec.gov{xml_filename}"
-    else:
-        # Relative path — extract just the portion after the accession folder
-        # e.g. "form13fInfoTable.xml" or "subfolder/form13fInfoTable.xml"
-        basename = xml_filename.rsplit(f"{acc_no_dashes}/", 1)[-1] if acc_no_dashes in xml_filename else xml_filename
-        xml_url = f"{base_url}/{basename}"
+    # Find the info table XML
+    xml_url = _find_info_table_url(xml_urls)
+    if not xml_url:
+        return pd.DataFrame()
+
     _rate_limit()
     resp = requests.get(xml_url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
