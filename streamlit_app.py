@@ -4,10 +4,11 @@ import streamlit as st
 
 from data.fund_holdings import (
     FUNDS,
-    compute_changes,
     get_all_holdings,
-    get_cross_fund_holdings,
-    get_quarter_holdings,
+)
+from data.sec_edgar import (
+    FUND_CIKS,
+    fetch_fund_holdings as sec_fetch_fund_holdings,
 )
 
 # ─── Page Config ─────────────────────────────────────────────
@@ -38,21 +39,159 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ─── CUSIP Lookup (from known 13F data) ─────────────────────
+# 13F filings don't include tickers/sectors, so we map CUSIPs
+CUSIP_LOOKUP = {
+    "92826C839": {"ticker": "V", "sector": "Financials"},
+    "02079K107": {"ticker": "GOOG", "sector": "Technology"},
+    "594918104": {"ticker": "MSFT", "sector": "Technology"},
+    "13646K108": {"ticker": "CP", "sector": "Industrials"},
+    "615369105": {"ticker": "MCO", "sector": "Financials"},
+    "78409V104": {"ticker": "SPGI", "sector": "Financials"},
+    "808513105": {"ticker": "SCHW", "sector": "Financials"},
+    "571748102": {"ticker": "MMC", "sector": "Financials"},
+    "46266C105": {"ticker": "IQV", "sector": "Healthcare"},
+    "G0408V102": {"ticker": "AON", "sector": "Financials"},
+    "023135106": {"ticker": "AMZN", "sector": "Technology"},
+    "57636Q104": {"ticker": "MA", "sector": "Financials"},
+    "30303M102": {"ticker": "META", "sector": "Technology"},
+    "N07059202": {"ticker": "ASML", "sector": "Technology"},
+    "09857L108": {"ticker": "BKNG", "sector": "Consumer Discretionary"},
+    "90353T100": {"ticker": "UBER", "sector": "Technology"},
+    "64110L106": {"ticker": "NFLX", "sector": "Communication Services"},
+    "L8681T102": {"ticker": "SPOT", "sector": "Communication Services"},
+    "55354G100": {"ticker": "MSCI", "sector": "Financials"},
+    "G1151C101": {"ticker": "ACN", "sector": "Technology"},
+    "79466L302": {"ticker": "CRM", "sector": "Technology"},
+    "337738108": {"ticker": "FI", "sector": "Financials"},
+    "48251W104": {"ticker": "KKR", "sector": "Financials"},
+    "45765U103": {"ticker": "NSIT", "sector": "Technology"},
+    "422819102": {"ticker": "HSII", "sector": "Industrials"},
+    "654445303": {"ticker": "NTDOY", "sector": "Communication Services"},
+    "75625L102": {"ticker": "RCRUY", "sector": "Industrials"},
+    "071734104": {"ticker": "BHC", "sector": "Healthcare"},
+    "81762P102": {"ticker": "NOW", "sector": "Technology"},
+    "98138H101": {"ticker": "WDAY", "sector": "Technology"},
+    "22788C105": {"ticker": "CRWD", "sector": "Technology"},
+}
+
+# Reverse: short name -> full name for the FUND_CIKS keys
+FUND_SHORT_NAMES = {name: info["short_name"] for name, info in FUNDS.items()}
+
+
+def _enrich_live_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Add ticker, sector, and fund_short columns to live SEC data."""
+    df = df.copy()
+    df["ticker"] = df["cusip"].map(lambda c: CUSIP_LOOKUP.get(c, {}).get("ticker", c[:6]))
+    df["sector"] = df["cusip"].map(lambda c: CUSIP_LOOKUP.get(c, {}).get("sector", "Other"))
+    df["fund_short"] = df["fund"].map(lambda f: FUNDS.get(f, {}).get("short_name", f))
+    return df
+
+
 # ─── Data Loading ────────────────────────────────────────────
-@st.cache_data
-def load_data():
-    return get_all_holdings()
+@st.cache_data(ttl=3600)
+def load_live_data() -> tuple[pd.DataFrame, bool]:
+    """Try to fetch live data from SEC EDGAR, fall back to sample data."""
+    try:
+        all_dfs = []
+        for fund_name, cik in FUND_CIKS.items():
+            df = sec_fetch_fund_holdings(fund_name, cik, num_quarters=2)
+            if not df.empty:
+                all_dfs.append(df)
+        if all_dfs:
+            combined = pd.concat(all_dfs, ignore_index=True)
+            combined = _enrich_live_data(combined)
+            return combined, True
+    except Exception:
+        pass
+    # Fallback to hardcoded sample data
+    return get_all_holdings(), False
 
 
-df_all = load_data()
+df_all, is_live = load_live_data()
 quarters = sorted(df_all["quarter"].unique(), reverse=True)
 latest_q = quarters[0]
 prior_q = quarters[1] if len(quarters) > 1 else None
 
+
+def _get_quarter(quarter: str) -> pd.DataFrame:
+    return df_all[df_all["quarter"] == quarter].copy()
+
+
+def _cross_fund(quarter: str) -> pd.DataFrame:
+    df = _get_quarter(quarter)
+    grouped = df.groupby("ticker").agg(
+        company=("company", "first"),
+        sector=("sector", "first"),
+        num_funds=("fund_short", "nunique"),
+        funds=("fund_short", lambda x: ", ".join(sorted(x.unique()))),
+        total_value=("value_usd", "sum"),
+        total_shares=("shares", "sum"),
+    ).reset_index()
+    return grouped.sort_values("num_funds", ascending=False)
+
+
+def _compute_changes(fund_name: str, current_q: str, prior_q_name: str) -> pd.DataFrame:
+    curr = df_all[(df_all["fund"] == fund_name) & (df_all["quarter"] == current_q)].copy()
+    prev = df_all[(df_all["fund"] == fund_name) & (df_all["quarter"] == prior_q_name)].copy()
+    curr = curr.set_index("ticker")
+    prev = prev.set_index("ticker")
+    all_tickers = set(curr.index) | set(prev.index)
+    changes = []
+    for ticker in all_tickers:
+        in_curr = ticker in curr.index
+        in_prev = ticker in prev.index
+        row = {
+            "ticker": ticker,
+            "company": curr.loc[ticker, "company"] if in_curr else prev.loc[ticker, "company"],
+            "sector": curr.loc[ticker, "sector"] if in_curr else prev.loc[ticker, "sector"],
+        }
+        if in_curr and in_prev:
+            row["curr_shares"] = curr.loc[ticker, "shares"]
+            row["prev_shares"] = prev.loc[ticker, "shares"]
+            row["curr_value"] = curr.loc[ticker, "value_usd"]
+            row["prev_value"] = prev.loc[ticker, "value_usd"]
+            row["share_change"] = curr.loc[ticker, "shares"] - prev.loc[ticker, "shares"]
+            row["share_change_pct"] = (row["share_change"] / prev.loc[ticker, "shares"]) * 100 if prev.loc[ticker, "shares"] else 0
+            row["value_change"] = curr.loc[ticker, "value_usd"] - prev.loc[ticker, "value_usd"]
+            if row["share_change"] > 0:
+                row["action"] = "Increased"
+            elif row["share_change"] < 0:
+                row["action"] = "Reduced"
+            else:
+                row["action"] = "Unchanged"
+        elif in_curr:
+            row["curr_shares"] = curr.loc[ticker, "shares"]
+            row["prev_shares"] = 0
+            row["curr_value"] = curr.loc[ticker, "value_usd"]
+            row["prev_value"] = 0
+            row["share_change"] = curr.loc[ticker, "shares"]
+            row["share_change_pct"] = 100.0
+            row["value_change"] = curr.loc[ticker, "value_usd"]
+            row["action"] = "New Position"
+        else:
+            row["curr_shares"] = 0
+            row["prev_shares"] = prev.loc[ticker, "shares"]
+            row["curr_value"] = 0
+            row["prev_value"] = prev.loc[ticker, "value_usd"]
+            row["share_change"] = -prev.loc[ticker, "shares"]
+            row["share_change_pct"] = -100.0
+            row["value_change"] = -prev.loc[ticker, "value_usd"]
+            row["action"] = "Sold Out"
+        changes.append(row)
+    return pd.DataFrame(changes).sort_values("curr_value", ascending=False)
+
 # ─── Sidebar ─────────────────────────────────────────────────
 with st.sidebar:
     st.title("13F Fund Tracker")
-    st.caption("Public 13F filings from SEC EDGAR")
+    if is_live:
+        st.success("Live data from SEC EDGAR")
+        filing_dates = df_all["filing_date"].dropna().unique()
+        if len(filing_dates) > 0:
+            latest_filing = max(filing_dates)
+            st.caption(f"Latest filing: {latest_filing}")
+    else:
+        st.warning("Using sample data (SEC EDGAR unavailable)")
     st.divider()
 
     page = st.radio(
@@ -88,7 +227,7 @@ if page == "Overview":
     st.caption(f"Reporting period: {latest_q}")
 
     # ── Fund Summary Metrics ──
-    df_latest = get_quarter_holdings(latest_q)
+    df_latest = df_all[df_all["quarter"] == latest_q].copy()
     fund_summary = (
         df_latest.groupby("fund_short")
         .agg(
@@ -336,7 +475,7 @@ elif page == "Position Changes":
     )
 
     if prior_q:
-        changes = compute_changes(selected_fund, latest_q, prior_q)
+        changes = _compute_changes(selected_fund, latest_q, prior_q)
 
         # ── Summary Metrics ──
         new_positions = changes[changes["action"] == "New Position"]
@@ -438,7 +577,7 @@ elif page == "Cross-Fund Analysis":
     st.header("Cross-Fund Analysis")
     st.caption(f"Stocks held by multiple funds — {latest_q}")
 
-    cross = get_cross_fund_holdings(latest_q)
+    cross = _cross_fund(latest_q)
 
     # ── High-Conviction Ideas (held by 3+ funds) ──
     st.subheader("High-Conviction Ideas")
@@ -462,7 +601,7 @@ elif page == "Cross-Fund Analysis":
     st.subheader("Fund Overlap")
     st.markdown("How many stocks each pair of funds has in common.")
 
-    df_latest = get_quarter_holdings(latest_q)
+    df_latest = _get_quarter(latest_q)
     fund_names = sorted(df_latest["fund_short"].unique())
     fund_tickers = {
         fund: set(df_latest[df_latest["fund_short"] == fund]["ticker"])
@@ -536,10 +675,10 @@ elif page == "Conviction Heatmap":
     st.header("Conviction Heatmap")
     st.caption(f"Portfolio weight (%) each fund allocates to shared positions — {latest_q}")
 
-    df_latest = get_quarter_holdings(latest_q)
+    df_latest = _get_quarter(latest_q)
 
     # Get stocks held by 2+ funds
-    cross = get_cross_fund_holdings(latest_q)
+    cross = _cross_fund(latest_q)
     shared_tickers = cross[cross["num_funds"] >= 2]["ticker"].tolist()
 
     if shared_tickers:
