@@ -12,6 +12,7 @@ Usage:
     df = fetch_fund_holdings("0001647251", num_quarters=4)
 """
 
+import re
 import time
 import xml.etree.ElementTree as ET
 
@@ -38,10 +39,26 @@ FUND_CIKS = {
 # 13F XML namespace
 NS = {"ns": "http://www.sec.gov/edgar/document/thirteenf/informationtable"}
 
+# Common info table filenames used by SEC filers
+COMMON_INFOTABLE_NAMES = [
+    "Form13fInfoTable.xml",
+    "form13fInfoTable.xml",
+    "form13finfoTable.xml",
+    "infotable.xml",
+    "InfoTable.xml",
+    "INFOTABLE.XML",
+]
+
 
 def _rate_limit():
     """SEC EDGAR allows max 10 requests/second."""
-    time.sleep(0.12)
+    time.sleep(0.15)
+
+
+def _get(url: str) -> requests.Response:
+    """Make a rate-limited GET request to SEC EDGAR."""
+    _rate_limit()
+    return requests.get(url, headers=HEADERS, timeout=20)
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching filings from SEC EDGAR...")
@@ -50,8 +67,7 @@ def get_recent_13f_filings(cik: str, num_filings: int = 4) -> list[dict]:
     cik_padded = cik.zfill(10)
     url = f"{SEC_BASE}/submissions/CIK{cik_padded}.json"
 
-    _rate_limit()
-    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp = _get(url)
     resp.raise_for_status()
     data = resp.json()
 
@@ -74,56 +90,68 @@ def get_recent_13f_filings(cik: str, num_filings: int = 4) -> list[dict]:
     return filings
 
 
-def _resolve_xml_url(href: str) -> str:
-    """Resolve an href from an EDGAR filing index page to a full URL."""
-    if href.startswith("http"):
-        return href
-    if href.startswith("/"):
-        return f"https://www.sec.gov{href}"
-    return f"https://www.sec.gov/{href}"
+def _find_info_table_url(cik: str, accession: str) -> str | None:
+    """Find the info table XML URL for a 13F filing using multiple strategies.
 
-
-def _collect_xml_urls(directory_url: str) -> list[str]:
-    """Fetch the EDGAR filing directory and return all XML document URLs.
-
-    Mirrors the approach used by github.com/toddwschneider/sec-13f-filings:
-    fetch the directory HTML, find all <a> links ending in .xml.
+    Returns the full URL to the info table XML, or None if not found.
     """
-    import re
+    cik_clean = cik.lstrip("0")
+    acc_no_dashes = accession.replace("-", "")
+    base_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}"
 
-    _rate_limit()
-    resp = requests.get(directory_url, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
+    # ── Strategy 1: JSON filing index (most reliable, exact filenames) ──
+    try:
+        resp = _get(f"{base_url}/index.json")
+        if resp.status_code == 200:
+            items = resp.json().get("directory", {}).get("item", [])
+            for item in items:
+                name = item.get("name", "")
+                if re.search(r'info.*table', name, re.IGNORECASE) and name.lower().endswith(".xml"):
+                    return f"{base_url}/{name}"
+    except Exception:
+        pass
 
-    # Extract all href values pointing to .xml files (preserve original case)
-    hrefs = re.findall(r'href="([^"]+\.xml)"', resp.text, re.IGNORECASE)
-    return [_resolve_xml_url(h) for h in hrefs]
+    # ── Strategy 2: HTML directory scraping (proven approach from 13f.info) ──
+    try:
+        resp = _get(base_url)
+        if resp.status_code == 200:
+            # Extract all .xml hrefs, preserving original case
+            hrefs = re.findall(r'href="([^"]+\.xml)"', resp.text, re.IGNORECASE)
+            xml_urls = []
+            for h in hrefs:
+                if h.startswith("http"):
+                    xml_urls.append(h)
+                elif h.startswith("/"):
+                    xml_urls.append(f"https://www.sec.gov{h}")
+                else:
+                    xml_urls.append(f"{base_url}/{h}")
 
+            # 2a: Match by URL pattern
+            for url in xml_urls:
+                if re.search(r'info.*table', url, re.IGNORECASE):
+                    return url
 
-def _find_info_table_url(xml_urls: list[str]) -> str | None:
-    """Identify the info table XML from a list of filing XML URLs.
+            # 2b: Download each XML and check for <informationTable> root
+            for url in xml_urls:
+                try:
+                    r = _get(url)
+                    if r.status_code != 200:
+                        continue
+                    root = ET.fromstring(r.content)
+                    tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+                    if tag.lower() == "informationtable":
+                        return url
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
-    Strategy 1: regex match for 'info.*table' in the URL (covers most filings).
-    Strategy 2: download each XML and check for <informationTable> element.
-    """
-    import re
-
-    # Strategy 1: Match URL pattern (fast, no extra downloads)
-    for url in xml_urls:
-        if re.search(r'info.*table', url, re.IGNORECASE):
-            return url
-
-    # Strategy 2: Download each XML and inspect content (robust fallback)
-    for url in xml_urls:
+    # ── Strategy 3: Try common filenames directly ──
+    for name in COMMON_INFOTABLE_NAMES:
         try:
-            _rate_limit()
-            resp = requests.get(url, headers=HEADERS, timeout=15)
-            if resp.status_code != 200:
-                continue
-            root = ET.fromstring(resp.content)
-            # Strip namespaces for simpler matching
-            tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
-            if tag.lower() == "informationtable":
+            url = f"{base_url}/{name}"
+            r = _get(url)
+            if r.status_code == 200 and b"<" in r.content[:100]:
                 return url
         except Exception:
             continue
@@ -134,28 +162,17 @@ def _find_info_table_url(xml_urls: list[str]) -> str | None:
 @st.cache_data(ttl=3600, show_spinner="Parsing 13F information table...")
 def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
     """Parse the 13F information table XML for a specific filing."""
-    cik_clean = cik.lstrip("0")
-    acc_no_dashes = accession.replace("-", "")
-    directory_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}"
-
-    # Collect all XML URLs from the filing directory page
-    xml_urls = _collect_xml_urls(directory_url)
-    if not xml_urls:
-        return pd.DataFrame()
-
-    # Find the info table XML
-    xml_url = _find_info_table_url(xml_urls)
+    xml_url = _find_info_table_url(cik, accession)
     if not xml_url:
-        return pd.DataFrame()
+        raise ValueError(f"Could not find info table XML for CIK={cik} accession={accession}")
 
-    _rate_limit()
-    resp = requests.get(xml_url, headers=HEADERS, timeout=15)
+    resp = _get(xml_url)
     resp.raise_for_status()
 
     try:
         root = ET.fromstring(resp.content)
-    except ET.ParseError:
-        return pd.DataFrame()
+    except ET.ParseError as e:
+        raise ValueError(f"Failed to parse XML from {xml_url}: {e}")
 
     holdings = []
     # Try with namespace
@@ -168,7 +185,7 @@ def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
         info_tables = root.findall(".//infoTable")
 
     for entry in info_tables:
-        def _get(tag):
+        def _get_tag(tag):
             for prefix in [
                 f"{{{NS['ns']}}}",
                 "{http://www.sec.gov/edgar/document/thirteenf/informationtable}",
@@ -192,16 +209,16 @@ def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
                         return child.text.strip()
             return ""
 
-        value_str = _get("value")
+        value_str = _get_tag("value")
         shares_str = _get_nested("shrsOrPrnAmt", "sshPrnamt")
 
         holdings.append({
-            "company": _get("nameOfIssuer"),
-            "cusip": _get("cusip"),
+            "company": _get_tag("nameOfIssuer"),
+            "cusip": _get_tag("cusip"),
             "value_usd": int(value_str) * 1000 if value_str else 0,  # 13F reports in thousands
             "shares": int(shares_str) if shares_str else 0,
             "share_type": _get_nested("shrsOrPrnAmt", "sshPrnamtType"),
-            "investment_discretion": _get("investmentDiscretion"),
+            "investment_discretion": _get_tag("investmentDiscretion"),
         })
 
     return pd.DataFrame(holdings)
@@ -216,9 +233,14 @@ def fetch_fund_holdings(
     """Fetch and combine multiple quarters of 13F data for a fund."""
     filings = get_recent_13f_filings(cik, num_quarters)
     all_dfs = []
+    errors = []
 
     for filing in filings:
-        df = parse_13f_xml(cik, filing["accession"])
+        try:
+            df = parse_13f_xml(cik, filing["accession"])
+        except Exception as e:
+            errors.append(f"{fund_name} {filing['accession']}: {e}")
+            continue
         if df.empty:
             continue
         df["fund"] = fund_name
@@ -235,6 +257,10 @@ def fetch_fund_holdings(
         df["pct_portfolio"] = (df["value_usd"] / total_val * 100).round(2) if total_val > 0 else 0
 
         all_dfs.append(df)
+
+    if errors:
+        for err in errors:
+            st.warning(err)
 
     if not all_dfs:
         return pd.DataFrame()

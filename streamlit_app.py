@@ -192,7 +192,8 @@ with st.sidebar:
     else:
         st.warning("Using sample data (SEC EDGAR unavailable)")
         if _load_error:
-            st.caption(f"Error: {_load_error}")
+            with st.expander("Error details"):
+                st.code(_load_error)
     st.divider()
 
     page = st.radio(
