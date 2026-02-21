@@ -77,45 +77,63 @@ def get_recent_13f_filings(cik: str, num_filings: int = 4) -> list[dict]:
 @st.cache_data(ttl=3600, show_spinner="Parsing 13F information table...")
 def parse_13f_xml(cik: str, accession: str) -> pd.DataFrame:
     """Parse the 13F information table XML for a specific filing."""
+    import re
+
     cik_clean = cik.lstrip("0")
     acc_no_dashes = accession.replace("-", "")
+    base_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}"
 
-    # First, get the filing index to find the XML info table file
-    index_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}/"
-    _rate_limit()
-    resp = requests.get(index_url, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-
-    # Look for the infotable XML file in the index
     xml_filename = None
-    for line in resp.text.split("\n"):
-        lower = line.lower()
-        if "infotable" in lower and ".xml" in lower:
-            # Extract filename from the HTML
-            import re
-            match = re.search(r'href="([^"]*infotable[^"]*\.xml)"', lower)
-            if match:
-                xml_filename = match.group(1)
-                break
 
+    # Strategy 1: Use JSON filing index (most reliable, preserves case)
+    try:
+        _rate_limit()
+        json_resp = requests.get(f"{base_url}/index.json", headers=HEADERS, timeout=15)
+        if json_resp.status_code == 200:
+            index_data = json_resp.json()
+            items = index_data.get("directory", {}).get("item", [])
+            for item in items:
+                name = item.get("name", "")
+                if "infotable" in name.lower() and name.lower().endswith(".xml"):
+                    xml_filename = name
+                    break
+    except Exception:
+        pass
+
+    # Strategy 2: Scrape HTML index (use original case, not lowered)
     if not xml_filename:
-        # Try alternate pattern - look for any XML that's not the primary doc
+        _rate_limit()
+        resp = requests.get(f"{base_url}/", headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+
         for line in resp.text.split("\n"):
-            if ".xml" in line.lower() and "primary_doc" not in line.lower():
-                import re
-                match = re.search(r'href="([^"]*\.xml)"', line.lower())
+            if "infotable" in line.lower() and ".xml" in line.lower():
+                match = re.search(r'href="([^"]+\.xml)"', line, re.IGNORECASE)
                 if match:
                     xml_filename = match.group(1)
                     break
 
+        if not xml_filename:
+            for line in resp.text.split("\n"):
+                if ".xml" in line.lower() and "primary_doc" not in line.lower():
+                    match = re.search(r'href="([^"]+\.xml)"', line, re.IGNORECASE)
+                    if match:
+                        xml_filename = match.group(1)
+                        break
+
     if not xml_filename:
         return pd.DataFrame()
 
-    # Extract just the filename if href contains a full path
-    xml_basename = xml_filename.rsplit("/", 1)[-1]
-
-    # Fetch and parse the XML
-    xml_url = f"{SEC_ARCHIVES}/{cik_clean}/{acc_no_dashes}/{xml_basename}"
+    # Resolve the filename: could be absolute path, relative path, or just a name
+    if xml_filename.startswith("http"):
+        xml_url = xml_filename
+    elif xml_filename.startswith("/"):
+        xml_url = f"https://www.sec.gov{xml_filename}"
+    else:
+        # Relative path — extract just the portion after the accession folder
+        # e.g. "form13fInfoTable.xml" or "subfolder/form13fInfoTable.xml"
+        basename = xml_filename.rsplit(f"{acc_no_dashes}/", 1)[-1] if acc_no_dashes in xml_filename else xml_filename
+        xml_url = f"{base_url}/{basename}"
     _rate_limit()
     resp = requests.get(xml_url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
