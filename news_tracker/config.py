@@ -1,0 +1,182 @@
+"""
+News Tracker — Topics and Feed Sources Configuration
+"""
+
+# Each topic has a name, description, and list of keywords used for matching.
+# Keywords are matched case-insensitively against article titles and summaries.
+TOPICS = {
+    "alternative_managers": {
+        "label": "Alternative Managers",
+        "description": "Hedge funds, PE firms, and alternative asset managers",
+        "keywords": [
+            "alternative manager",
+            "alternative asset",
+            "hedge fund",
+            "private equity",
+            "asset management",
+            "fund manager",
+            "investment manager",
+            "apollo",
+            "blackstone",
+            "kkr",
+            "carlyle",
+            "ares management",
+            "brookfield",
+            "oaktree",
+            "blue owl",
+            "golub capital",
+            "hps investment",
+            "owl rock",
+            "sixth street",
+            "alternative investment",
+            "fund of funds",
+            "multi-strategy",
+            "macro fund",
+            "long short",
+            "market neutral",
+            "event driven",
+            "distressed debt",
+            "activist investor",
+        ],
+    },
+    "private_credit": {
+        "label": "Private Credit",
+        "description": "Direct lending, mezzanine, and private debt markets",
+        "keywords": [
+            "private credit",
+            "private debt",
+            "direct lending",
+            "mezzanine",
+            "unitranche",
+            "leveraged loan",
+            "middle market lending",
+            "senior secured loan",
+            "private loan",
+            "credit fund",
+            "private lending",
+            "bdc",
+            "business development company",
+            "syndicated loan",
+            "covenant-lite",
+            "cov-lite",
+            "clo",
+            "collateralized loan",
+            "shadow banking",
+            "non-bank lending",
+            "sponsor finance",
+            "lbo financing",
+            "credit strategy",
+            "floating rate",
+            "spread tightening",
+            "private placement",
+        ],
+    },
+    "private_equity": {
+        "label": "Private Equity",
+        "description": "Buyouts, growth equity, and PE deal activity",
+        "keywords": [
+            "private equity",
+            "buyout",
+            "lbo",
+            "leveraged buyout",
+            "growth equity",
+            "pe fund",
+            "pe deal",
+            "take-private",
+            "going private",
+            "portfolio company",
+            "exit multiple",
+            "carry",
+            "carried interest",
+            "dry powder",
+            "capital call",
+            "fundraising",
+            "pe fundraise",
+            "co-investment",
+            "co-invest",
+            "secondary market",
+            "gp stake",
+            "continuation fund",
+            "sponsor-backed",
+        ],
+    },
+    "real_assets": {
+        "label": "Real Assets & Infrastructure",
+        "description": "Real estate, infrastructure, and hard asset investing",
+        "keywords": [
+            "infrastructure fund",
+            "real asset",
+            "real estate fund",
+            "reit",
+            "core real estate",
+            "value-add real estate",
+            "opportunistic real estate",
+            "data center investment",
+            "renewable energy fund",
+            "infrastructure investment",
+            "timber fund",
+            "farmland fund",
+            "logistics real estate",
+            "industrial real estate",
+        ],
+    },
+}
+
+
+# RSS feeds covering financial and alternative investment news.
+RSS_FEEDS = [
+    {
+        "name": "Reuters Business",
+        "url": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best",
+        "category": "general",
+    },
+    {
+        "name": "Bloomberg Markets",
+        "url": "https://feeds.bloomberg.com/markets/news.rss",
+        "category": "markets",
+    },
+    {
+        "name": "Financial Times",
+        "url": "https://www.ft.com/rss/home",
+        "category": "general",
+    },
+    {
+        "name": "Wall Street Journal Markets",
+        "url": "https://feeds.a]wsj.net/rss/RSSMarketsMain.xml",
+        "category": "markets",
+    },
+    {
+        "name": "Institutional Investor",
+        "url": "https://www.institutionalinvestor.com/feed",
+        "category": "institutional",
+    },
+    {
+        "name": "PitchBook News",
+        "url": "https://pitchbook.com/rss/news",
+        "category": "deals",
+    },
+    {
+        "name": "Private Debt Investor",
+        "url": "https://www.privatedebtinvestor.com/feed/",
+        "category": "private_credit",
+    },
+    {
+        "name": "PE Hub",
+        "url": "https://www.pehub.com/feed/",
+        "category": "private_equity",
+    },
+    {
+        "name": "Seeking Alpha",
+        "url": "https://seekingalpha.com/market_currents.xml",
+        "category": "markets",
+    },
+    {
+        "name": "Yahoo Finance",
+        "url": "https://finance.yahoo.com/news/rssindex",
+        "category": "general",
+    },
+]
+
+
+# Minimum relevance score (0-100) for an article to be shown in results.
+MIN_RELEVANCE_SCORE = 15
