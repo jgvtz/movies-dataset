@@ -3,6 +3,7 @@
 """
 
 import json
+import logging
 
 import numpy as np
 from flask import Flask, render_template, jsonify, request
@@ -15,6 +16,19 @@ from data.fund_holdings import (
     compute_changes,
     get_cross_fund_holdings,
 )
+from news_tracker.config import TOPICS, MIN_RELEVANCE_SCORE, RSS_FEEDS
+from news_tracker.fetcher import fetch_all_feeds
+from news_tracker.analyzer import classify_article
+from news_tracker.storage import (
+    init_db,
+    upsert_articles,
+    query_articles,
+    get_sources,
+    get_stats,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class NumpyJSONProvider(DefaultJSONProvider):
@@ -32,6 +46,9 @@ class NumpyJSONProvider(DefaultJSONProvider):
 app = Flask(__name__)
 app.json_provider_class = NumpyJSONProvider
 app.json = NumpyJSONProvider(app)
+
+# Initialise news tracker DB
+init_db()
 
 
 # ─── Helpers ──────────────────────────────────────────────────
@@ -202,6 +219,70 @@ def api_crossfund():
         "fund_names": fund_names,
         "heatmap": heatmap,
     })
+
+
+# ─── News Tracker API ────────────────────────────────────────
+
+@app.route("/api/news")
+def api_news():
+    """Query stored news articles with optional filters."""
+    topic_id = request.args.get("topic")
+    source = request.args.get("source")
+    min_score = int(request.args.get("min_score", MIN_RELEVANCE_SCORE))
+    search = request.args.get("search") or None
+    limit = int(request.args.get("limit", 200))
+
+    articles = query_articles(
+        topic_id=topic_id if topic_id else None,
+        source=source if source else None,
+        min_score=min_score,
+        search=search,
+        limit=limit,
+    )
+    return jsonify({"articles": articles, "count": len(articles)})
+
+
+@app.route("/api/news/fetch", methods=["POST"])
+def api_news_fetch():
+    """Fetch latest articles from RSS feeds, analyze, and store."""
+    raw_articles = fetch_all_feeds()
+    relevant = []
+    for art in raw_articles:
+        topics = classify_article(art)
+        if topics:
+            relevant.append((art, topics))
+    upsert_articles(relevant)
+    return jsonify({
+        "fetched": len(raw_articles),
+        "relevant": len(relevant),
+        "feeds": len(RSS_FEEDS),
+    })
+
+
+@app.route("/api/news/stats")
+def api_news_stats():
+    """Return news article stats."""
+    return jsonify(get_stats())
+
+
+@app.route("/api/news/sources")
+def api_news_sources():
+    """Return distinct article sources."""
+    return jsonify({"sources": get_sources()})
+
+
+@app.route("/api/news/topics")
+def api_news_topics():
+    """Return configured topics."""
+    topics_list = []
+    for tid, tcfg in TOPICS.items():
+        topics_list.append({
+            "id": tid,
+            "label": tcfg["label"],
+            "description": tcfg["description"],
+            "keyword_count": len(tcfg["keywords"]),
+        })
+    return jsonify({"topics": topics_list})
 
 
 if __name__ == "__main__":
